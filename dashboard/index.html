@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Architecture Drift Dashboard</title>
+    <!-- React & Babel CDNs -->
+    <script
+      src="https://unpkg.com/react@18/umd/react.development.js"
+      crossorigin
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"
+      crossorigin
+    ></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- react-force-graph CDN -->
+    <script src="https://unpkg.com/react-force-graph-2d"></script>
+    <style>
+      body {
+        font-family: -apple-system, system-ui, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #f9fafb;
+      }
+      .container {
+        display: flex;
+        gap: 20px;
+        height: 85vh;
+      }
+      .panel {
+        background: white;
+        padding: 20px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+      }
+      .table-panel {
+        flex: 1;
+        overflow-y: auto;
+      }
+      .graph-panel {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        border: 1px solid #e5e7eb;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+      th,
+      td {
+        text-align: left;
+        padding: 12px;
+        border-bottom: 1px solid #e5e7eb;
+      }
+      th {
+        background: #f3f4f6;
+      }
+      .badge {
+        padding: 4px 8px;
+        border-radius: 9999px;
+        font-size: 12px;
+        font-weight: bold;
+        text-transform: uppercase;
+      }
+      .high {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+      .medium {
+        background: #fef3c7;
+        color: #92400e;
+      }
+      .low {
+        background: #d1fae5;
+        color: #065f46;
+      }
+      h1 {
+        margin-top: 0;
+        color: #111827;
+      }
+      .score-box {
+        font-size: 24px;
+        font-weight: bold;
+        margin-bottom: 20px;
+        color: #374151;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState, useEffect } = React;
+
+      // ForceGraph2D is loaded globally as 'ForceGraph2D' by the CDN script
+      const ForceGraph2D = window.ForceGraph2D;
+
+      function App() {
+        const [graphData, setGraphData] = useState({ nodes: [], links: [] });
+        const [violations, setViolations] = useState([]);
+        const [health, setHealth] = useState({
+          health_score: 100,
+          status: "Loading",
+        });
+
+        useEffect(() => {
+          // Fetch data from FastAPI backend
+          fetch("http://localhost:8000/graph")
+            .then((res) => res.json())
+            .then((data) => setGraphData(data))
+            .catch((err) => console.error("Error fetching graph:", err));
+
+          fetch("http://localhost:8000/violations")
+            .then((res) => res.json())
+            .then((data) => {
+              console.log("Violations fetched:", data);
+              setViolations(Array.isArray(data) ? data : []);
+            })
+            .catch((err) => console.error("Error fetching violations:", err));
+
+          fetch("http://localhost:8000/health-score")
+            .then((res) => res.json())
+            .then((data) => setHealth(data))
+            .catch((err) => console.error("Error fetching health:", err));
+        }, []);
+
+        return (
+          <div>
+            <h1>Architecture Drift Dashboard</h1>
+            <div className="score-box">
+              System Health Score:{" "}
+              <span
+                style={{ color: health.health_score < 70 ? "red" : "green" }}
+              >
+                {health.health_score}/100
+              </span>
+            </div>
+
+            <div className="container">
+              <div className="panel table-panel">
+                <h2>Detected Violations</h2>
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Severity</th>
+                      <th>Rule Broken</th>
+                      <th>AI Explanation & Fix</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {violations.map((v, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <span className={`badge ${v.severity}`}>
+                            {v.severity}
+                          </span>
+                        </td>
+                        <td>
+                          {v.rule_broken}
+                          <br />
+                          <small style={{ color: "#6b7280" }}>
+                            Edges: {v.edge_or_cycle.join(" → ")}
+                          </small>
+                        </td>
+                        <td>
+                          <b>Why:</b> {v.ai_explanation}
+                          <br />
+                          <b>Fix:</b> {v.ai_fix}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="panel graph-panel">
+                {/* Added a safeguard to only render the graph if nodes exist */}
+                {graphData.nodes.length > 0 && (
+                  <ForceGraph2D
+                    graphData={graphData}
+                    width={600}
+                    height={600}
+                    nodeLabel="id"
+                    nodeAutoColorBy="group"
+                    linkColor={(link) =>
+                      link.is_violation ? "red" : "#9ca3af"
+                    }
+                    linkWidth={(link) => (link.is_violation ? 3 : 1)}
+                    linkDirectionalArrowLength={3.5}
+                    linkDirectionalArrowRelPos={1}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById("root"));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
