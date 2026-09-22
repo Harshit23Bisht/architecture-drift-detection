@@ -2,6 +2,7 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Architecture Drift Dashboard</title>
     <!-- React & Babel CDNs -->
     <script
@@ -16,76 +17,213 @@
     <!-- react-force-graph CDN -->
     <script src="https://unpkg.com/react-force-graph-2d"></script>
     <style>
-      body {
-        font-family: -apple-system, system-ui, sans-serif;
-        margin: 0;
-        padding: 20px;
-        background: #f9fafb;
+      :root {
+        --primary: #2563eb;
+        --primary-hover: #1d4ed8;
+        --bg: #f8fafc;
+        --card-bg: #ffffff;
+        --border: #e2e8f0;
+        --text: #0f172a;
+        --text-muted: #64748b;
       }
-      .container {
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        margin: 0;
+        padding: 24px;
+        background-color: var(--bg);
+        color: var(--text);
+      }
+      .header {
         display: flex;
-        gap: 20px;
-        height: 85vh;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 24px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+      }
+      .card {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 20px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        margin-bottom: 24px;
+      }
+      .control-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr auto;
+        gap: 16px;
+        align-items: flex-end;
+      }
+      .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      label {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-muted);
+      }
+      input[type="text"], select {
+        padding: 10px 14px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        font-size: 14px;
+        outline: none;
+        transition: border-color 0.2s;
+      }
+      input[type="text"]:focus, select:focus {
+        border-color: var(--primary);
+      }
+      button {
+        padding: 10px 20px;
+        background-color: var(--primary);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        font-weight: 600;
+        font-size: 14px;
+        cursor: pointer;
+        transition: background-color 0.2s;
+        height: 42px;
+      }
+      button:hover:not(:disabled) {
+        background-color: var(--primary-hover);
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+      .metric-box {
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 16px;
+        text-align: center;
+      }
+      .metric-val {
+        font-size: 28px;
+        font-weight: 800;
+        margin-top: 4px;
+      }
+      .metric-label {
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text-muted);
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .status-healthy { color: #16a34a; }
+      .status-critical { color: #dc2626; }
+      
+      .main-layout {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 24px;
+        height: 600px;
       }
       .panel {
-        background: white;
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 10px;
         padding: 20px;
-        border-radius: 8px;
-        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
-      .table-panel {
+      .panel-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      .panel-title {
+        font-size: 18px;
+        font-weight: 700;
+        margin: 0;
+      }
+      .filters {
+        display: flex;
+        gap: 10px;
+      }
+      .table-container {
         flex: 1;
         overflow-y: auto;
-      }
-      .graph-panel {
-        flex: 1;
-        display: flex;
-        justify-content: center;
-        align-items: center;
-        border: 1px solid #e5e7eb;
       }
       table {
         width: 100%;
         border-collapse: collapse;
-        margin-top: 10px;
+        font-size: 13px;
       }
-      th,
-      td {
-        text-align: left;
+      th, td {
         padding: 12px;
-        border-bottom: 1px solid #e5e7eb;
+        text-align: left;
+        border-bottom: 1px solid var(--border);
       }
       th {
-        background: #f3f4f6;
+        background: #f1f5f9;
+        font-weight: 600;
+        color: var(--text-muted);
+        position: sticky;
+        top: 0;
       }
       .badge {
         padding: 4px 8px;
         border-radius: 9999px;
-        font-size: 12px;
-        font-weight: bold;
+        font-size: 11px;
+        font-weight: 700;
         text-transform: uppercase;
+        display: inline-block;
       }
-      .high {
-        background: #fee2e2;
+      .badge-high { background: #fee2e2; color: #991b1b; }
+      .badge-medium { background: #fef3c7; color: #92400e; }
+      .badge-low { background: #d1fae5; color: #065f46; }
+
+      .graph-container {
+        flex: 1;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: #fafafa;
+        border-radius: 8px;
+        overflow: hidden;
+      }
+      .alert {
+        padding: 14px;
+        background-color: #fef2f2;
+        border: 1px solid #fecaca;
         color: #991b1b;
-      }
-      .medium {
-        background: #fef3c7;
-        color: #92400e;
-      }
-      .low {
-        background: #d1fae5;
-        color: #065f46;
-      }
-      h1 {
-        margin-top: 0;
-        color: #111827;
-      }
-      .score-box {
-        font-size: 24px;
-        font-weight: bold;
+        border-radius: 8px;
         margin-bottom: 20px;
-        color: #374151;
+        font-size: 14px;
+      }
+      .empty-state {
+        text-align: center;
+        padding: 40px;
+        color: var(--text-muted);
+      }
+      .spinner {
+        display: inline-block;
+        width: 16px;
+        height: 16px;
+        border: 2px solid rgba(255,255,255,0.3);
+        border-radius: 50%;
+        border-top-color: white;
+        animation: spin 0.8s linear infinite;
+        margin-right: 8px;
+      }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
       }
     </style>
   </head>
@@ -94,104 +232,311 @@
 
     <script type="text/babel">
       const { useState, useEffect } = React;
-
-      // ForceGraph2D is loaded globally as 'ForceGraph2D' by the CDN script
       const ForceGraph2D = window.ForceGraph2D;
 
+      const API_BASE_URL = window.REACT_APP_API_URL || "http://localhost:8000";
+
       function App() {
-        const [graphData, setGraphData] = useState({ nodes: [], links: [] });
-        const [violations, setViolations] = useState([]);
-        const [health, setHealth] = useState({
-          health_score: 100,
-          status: "Loading",
+        const [repoPath, setRepoPath] = useState("");
+        const [rulesPath, setRulesPath] = useState("");
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState(null);
+        
+        const [analysisResult, setAnalysisResult] = useState(null);
+        const [severityFilter, setSeverityFilter] = useState("ALL");
+        const [typeFilter, setTypeFilter] = useState("ALL");
+
+        const [history, setHistory] = useState([]);
+
+        // Run default analysis and fetch history on load
+        useEffect(() => {
+          runAnalysis();
+          fetchHistory();
+        }, []);
+
+        const fetchHistory = () => {
+          fetch(`${API_BASE_URL}/health-history`)
+            .then((res) => res.json())
+            .then((data) => setHistory(Array.isArray(data) ? data : []))
+            .catch((err) => console.error("Error fetching history:", err));
+        };
+
+        const runAnalysis = (customRepo, customRules) => {
+          setLoading(true);
+          setError(null);
+
+          const payload = {
+            repo_path: customRepo !== undefined ? customRepo : (repoPath || null),
+            rules_path: customRules !== undefined ? customRules : (rulesPath || null)
+          };
+
+          fetch(`${API_BASE_URL}/analyze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+          })
+            .then(async (res) => {
+              const data = await res.json();
+              if (!res.ok) {
+                throw new Error(data.detail || "Analysis request failed.");
+              }
+              return data;
+            })
+            .then((data) => {
+              setAnalysisResult(data);
+              if (data.target_repository) setRepoPath(data.target_repository);
+              if (data.rules_path) setRulesPath(data.rules_path);
+              fetchHistory();
+            })
+            .catch((err) => {
+              console.error("Analysis Error:", err);
+              setError(err.message);
+            })
+            .finally(() => {
+              setLoading(false);
+            });
+        };
+
+
+        const violations = analysisResult?.violations || [];
+        const filteredViolations = violations.filter((v) => {
+          const matchesSev =
+            severityFilter === "ALL" ||
+            v.severity?.toUpperCase() === severityFilter;
+          const matchesType =
+            typeFilter === "ALL" ||
+            v.violation_type?.toUpperCase() === typeFilter;
+          return matchesSev && matchesType;
         });
 
-        useEffect(() => {
-          // Fetch data from FastAPI backend
-          fetch("http://localhost:8000/graph")
-            .then((res) => res.json())
-            .then((data) => setGraphData(data))
-            .catch((err) => console.error("Error fetching graph:", err));
+        const graphData = {
+          nodes: analysisResult?.nodes || [],
+          links: analysisResult?.links || []
+        };
 
-          fetch("http://localhost:8000/violations")
-            .then((res) => res.json())
-            .then((data) => {
-              console.log("Violations fetched:", data);
-              setViolations(Array.isArray(data) ? data : []);
-            })
-            .catch((err) => console.error("Error fetching violations:", err));
-
-          fetch("http://localhost:8000/health-score")
-            .then((res) => res.json())
-            .then((data) => setHealth(data))
-            .catch((err) => console.error("Error fetching health:", err));
-        }, []);
+        const healthScore = analysisResult?.health_score ?? 100;
+        const statusText = analysisResult?.status || "Healthy";
 
         return (
           <div>
-            <h1>Architecture Drift Dashboard</h1>
-            <div className="score-box">
-              System Health Score:{" "}
-              <span
-                style={{ color: health.health_score < 70 ? "red" : "green" }}
-              >
-                {health.health_score}/100
+            <div className="header">
+              <h1>Architecture Drift Dashboard</h1>
+              <span style={{ fontSize: "13px", color: "var(--text-muted)" }}>
+                Backend API: <code>{API_BASE_URL}</code>
               </span>
             </div>
 
-            <div className="container">
-              <div className="panel table-panel">
-                <h2>Detected Violations</h2>
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Severity</th>
-                      <th>Rule Broken</th>
-                      <th>AI Explanation & Fix</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {violations.map((v, idx) => (
-                      <tr key={idx}>
-                        <td>
-                          <span className={`badge ${v.severity}`}>
-                            {v.severity}
-                          </span>
-                        </td>
-                        <td>
-                          {v.rule_broken}
-                          <br />
-                          <small style={{ color: "#6b7280" }}>
-                            Edges: {v.edge_or_cycle.join(" → ")}
-                          </small>
-                        </td>
-                        <td>
-                          <b>Why:</b> {v.ai_explanation}
-                          <br />
-                          <b>Fix:</b> {v.ai_fix}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            {error && <div className="alert">⚠️ {error}</div>}
+
+            {/* Analysis Controls Card */}
+            <div className="card">
+              <div className="control-grid">
+                <div className="field-group">
+                  <label>Target Repository Path</label>
+                  <input
+                    type="text"
+                    placeholder="Leave empty for default sample repo"
+                    value={repoPath}
+                    onChange={(e) => setRepoPath(e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+                <div className="field-group">
+                  <label>Architecture Rules YAML Path</label>
+                  <input
+                    type="text"
+                    placeholder="Leave empty for default rules file"
+                    value={rulesPath}
+                    onChange={(e) => setRulesPath(e.target.value)}
+                    disabled={loading}
+                  />
+                </div>
+                <button
+                  onClick={() => runAnalysis(repoPath, rulesPath)}
+                  disabled={loading}
+                >
+                  {loading && <span className="spinner"></span>}
+                  {loading ? "Analyzing..." : "Run Analysis"}
+                </button>
+              </div>
+            </div>
+
+            {/* Metrics Overview Cards */}
+            <div className="metrics-grid">
+              <div className="metric-box">
+                <div className="metric-label">System Health</div>
+                <div className={`metric-val ${healthScore >= 70 ? "status-healthy" : "status-critical"}`}>
+                  {healthScore}/100
+                </div>
+                <small style={{ color: "var(--text-muted)" }}>{statusText}</small>
+              </div>
+              <div className="metric-box">
+                <div className="metric-label">Files Analyzed</div>
+                <div className="metric-val">{analysisResult?.parsed_file_count || 0}</div>
+              </div>
+              <div className="metric-box">
+                <div className="metric-label">Dependency Edges</div>
+                <div className="metric-val">{analysisResult?.total_dependencies || 0}</div>
+              </div>
+              <div className="metric-box">
+                <div className="metric-label">Total Violations</div>
+                <div className="metric-val" style={{ color: violations.length > 0 ? "#dc2626" : "#16a34a" }}>
+                  {violations.length}
+                </div>
+              </div>
+            </div>
+
+            {/* Main Panel Layout */}
+            <div className="main-layout">
+              {/* Violations Table Panel */}
+              <div className="panel">
+                <div className="panel-header">
+                  <h2 className="panel-title">Violations ({filteredViolations.length})</h2>
+                  <div className="filters">
+                    <select
+                      value={severityFilter}
+                      onChange={(e) => setSeverityFilter(e.target.value)}
+                    >
+                      <option value="ALL">All Severities</option>
+                      <option value="HIGH">High</option>
+                      <option value="MEDIUM">Medium</option>
+                      <option value="LOW">Low</option>
+                    </select>
+                    <select
+                      value={typeFilter}
+                      onChange={(e) => setTypeFilter(e.target.value)}
+                    >
+                      <option value="ALL">All Types</option>
+                      <option value="LAYER_VIOLATION">Layer Violation</option>
+                      <option value="CIRCULAR_DEPENDENCY">Circular Dependency</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="table-container">
+                  {filteredViolations.length === 0 ? (
+                    <div className="empty-state">
+                      {loading ? "Loading analysis results..." : "No violations detected."}
+                    </div>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Severity</th>
+                          <th>Rule Broken & Location</th>
+                          <th>AI Explanation & Fix</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filteredViolations.map((v, idx) => (
+                          <tr key={v.violation_id || idx}>
+                            <td>
+                              <span className={`badge badge-${v.severity ? v.severity.toLowerCase() : "low"}`}>
+                                {v.severity || "LOW"}
+                              </span>
+                            </td>
+                            <td>
+                              <b>{v.rule_broken}</b>
+                              <br />
+                              <small style={{ color: "#475569" }}>
+                                Involves: {v.edge_or_cycle ? v.edge_or_cycle.join(" → ") : "N/A"}
+                              </small>
+                              {v.line && (
+                                <div>
+                                  <small style={{ color: "#2563eb", fontStyle: "italic" }}>
+                                    Line Number: {v.line}
+                                  </small>
+                                </div>
+                              )}
+                            </td>
+                            <td>
+                              <b>Why:</b> {v.ai_explanation}
+                              <br />
+                              <b style={{ color: "#047857" }}>Fix:</b> {v.ai_fix}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
               </div>
 
-              <div className="panel graph-panel">
-                {/* Added a safeguard to only render the graph if nodes exist */}
-                {graphData.nodes.length > 0 && (
-                  <ForceGraph2D
-                    graphData={graphData}
-                    width={600}
-                    height={600}
-                    nodeLabel="id"
-                    nodeAutoColorBy="group"
-                    linkColor={(link) =>
-                      link.is_violation ? "red" : "#9ca3af"
-                    }
-                    linkWidth={(link) => (link.is_violation ? 3 : 1)}
-                    linkDirectionalArrowLength={3.5}
-                    linkDirectionalArrowRelPos={1}
-                  />
+              {/* Force Directed Graph Panel */}
+              <div className="panel">
+                <div className="panel-header">
+                  <h2 className="panel-title">Dependency Graph Topology</h2>
+                </div>
+                <div className="graph-container">
+                  {graphData.nodes.length > 0 ? (
+                    <ForceGraph2D
+                      graphData={graphData}
+                      width={550}
+                      height={500}
+                      nodeLabel="id"
+                      nodeAutoColorBy="group"
+                      linkColor={(link) =>
+                        link.is_violation ? "#dc2626" : "#cbd5e1"
+                      }
+                      linkWidth={(link) => (link.is_violation ? 3 : 1)}
+                      linkDirectionalArrowLength={4}
+                      linkDirectionalArrowRelPos={1}
+                    />
+                  ) : (
+                    <div className="empty-state">
+                      {loading ? "Constructing graph..." : "No topology graph data available."}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Health Score History Card */}
+            <div className="card" style={{ marginTop: "24px" }}>
+              <div className="panel-header">
+                <h2 className="panel-title">Health Score History & Trends</h2>
+                <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+                  SQLite Persistence ({history.length} runs)
+                </span>
+              </div>
+              <div className="table-container" style={{ maxHeight: "300px" }}>
+                {history.length === 0 ? (
+                  <div className="empty-state">No historical analysis records found.</div>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Run ID</th>
+                        <th>Repository</th>
+                        <th>Commit SHA</th>
+                        <th>Timestamp</th>
+                        <th>Health Score</th>
+                        <th>Violations (High / Med / Low)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((h) => (
+                        <tr key={h.id}>
+                          <td>#{h.id}</td>
+                          <td><b>{h.repo_name}</b></td>
+                          <td><code>{h.commit_sha}</code></td>
+                          <td>{new Date(h.timestamp).toLocaleString()}</td>
+                          <td>
+                            <span className={`badge ${h.health_score >= 70 ? "badge-low" : "badge-high"}`}>
+                              {h.health_score}/100
+                            </span>
+                          </td>
+                          <td>
+                            {h.total_violations} total (
+                            <span style={{ color: "#dc2626", fontWeight: "bold" }}>{h.high_count}H</span> /{" "}
+                            <span style={{ color: "#d97706", fontWeight: "bold" }}>{h.medium_count}M</span> /{" "}
+                            <span style={{ color: "#16a34a", fontWeight: "bold" }}>{h.low_count}L</span>
+                            )
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 )}
               </div>
             </div>
@@ -204,3 +549,4 @@
     </script>
   </body>
 </html>
+

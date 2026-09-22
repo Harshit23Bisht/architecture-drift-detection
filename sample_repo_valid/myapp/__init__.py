@@ -1,0 +1,1 @@
+# myapp valid architecture package

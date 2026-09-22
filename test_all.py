@@ -1,54 +1,58 @@
 import os
+import json
 from pathlib import Path
-from parser.ast_walker import PythonAstWalker
-from parser.resolver import DependencyResolver
+from engine.pipeline import ArchitecturePipeline
 
-targets = ["requests", "flask", "fastapi"]
+def run_cli_analysis():
+    base_dir = Path(__file__).parent.resolve()
+    sample_repo = base_dir / "sample_repo"
+    sample_rules = sample_repo / "architecture_rules.yaml"
 
-print("\n" + "="*60)
-print("TESTING ARCHITECTURE DRIFT DETECTION ENGINE")
-print("="*60)
+    print("\n" + "="*60)
+    print("ARCHITECTURE DRIFT DETECTION - UNIFIED PIPELINE RUNNER")
+    print("="*60)
 
-walker = PythonAstWalker()
+    if not sample_repo.exists() or not sample_rules.exists():
+        print(f"[ERROR] Sample repo or rules file missing at {sample_repo}")
+        return
 
-for name in targets:
-    resolved_path = (Path("..") / name).resolve()
-    
-    if not resolved_path.exists():
-        print(f"\n[ERROR] [{name.upper()}] Folder not found at {resolved_path}")
-        continue
-        
-    print(f"\nScanning Codebase: {name.upper()}")
-    print(f"Location: {resolved_path}")
-    
-    resolver = DependencyResolver(base_package=name)
-    python_files = list(resolved_path.rglob("*.py"))
-    parsed_count = 0
-    total_imports = 0
-    total_calls = 0
-    
-    for py_file in python_files:
-        try:
-            with open(py_file, "rb") as f:
-                content = f.read()
-                
-            tree = walker.parse_file(content)
-            imports = walker.extract_imports(tree.root_node)
-            calls = walker.extract_calls(tree.root_node)
-            
-            source_module = resolver.resolve_module_name(str(py_file), str(resolved_path))
-            resolver.add_edges_from_ast(source_module, imports, calls)
-            
-            parsed_count += 1
-            total_imports += len(imports)
-            total_calls += len(calls)
-        except Exception as e:
-            print(f"[WARNING] Error parsing {py_file.name}: {e}")
-            
-    print(f"[SUCCESS] Scanned without errors.")
-    print(f"   Python Files Parsed: {parsed_count}")
-    print(f"   Imports Extracted:   {total_imports}")
-    print(f"   Calls Extracted:     {total_calls}")
-    print(f"   Dependency Edges:    {len(resolver.edges)}")
+    print(f"\nScanning Repository: {sample_repo}")
+    print(f"Using Rules File:     {sample_rules}\n")
 
-print("\n" + "="*60 + "\n")
+    pipeline = ArchitecturePipeline()
+    result = pipeline.analyze(str(sample_repo), str(sample_rules))
+
+    if result.get("error"):
+        print(f"[ERROR] Pipeline execution failed: {result['error']}")
+        return
+
+    print("--- SCAN SUMMARY ---")
+    print(f"Target Repository:  {result['target_repository']}")
+    print(f"Discovered Files:   {result['parsed_file_count']}")
+    print(f"Dependency Edges:   {result['total_dependencies']}")
+    print(f"Health Score:       {result['health_score']}/100 ({result['status']})")
+    print(f"Total Violations:   {len(result['violations'])}\n")
+
+    print("--- DISCOVERED FILES ---")
+    for file in result['discovered_files']:
+        print(f"  - {file}")
+
+    print("\n--- DEPENDENCY EDGES ---")
+    for link in result['links']:
+        viol_tag = "[VIOLATION]" if link['is_violation'] else "[OK]"
+        line_info = f"(Line {link['line']})" if link.get('line') else ""
+        print(f"  {viol_tag} {link['source']} -> {link['target']} {line_info}")
+
+    print("\n--- DETECTED VIOLATIONS ---")
+    for idx, v in enumerate(result['violations'], 1):
+        print(f"\n[{idx}] {v.get('violation_id', 'V-?')} - Type: {v.get('violation_type').upper()}")
+        print(f"    Rule Broken: {v.get('rule_broken')}")
+        print(f"    Involved:    {v.get('edge_or_cycle')}")
+        print(f"    Severity:    {v.get('severity', 'N/A').upper()} (Impact Score: {v.get('impact_score')})")
+        print(f"    Why:         {v.get('ai_explanation')}")
+        print(f"    Fix:         {v.get('ai_fix')}")
+
+    print("\n" + "="*60 + "\n")
+
+if __name__ == "__main__":
+    run_cli_analysis()

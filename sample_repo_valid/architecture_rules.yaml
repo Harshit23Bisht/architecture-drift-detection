@@ -1,0 +1,11 @@
+layers:
+  - name: Controller
+    allowed_calls:
+      - Service
+    forbidden_calls:
+      - Repository
+  - name: Service
+    allowed_calls:
+      - Repository
+  - name: Repository
+    allowed_calls: []
