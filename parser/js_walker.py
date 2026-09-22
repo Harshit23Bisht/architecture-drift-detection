@@ -14,35 +14,36 @@ class JavaScriptAstWalker(BaseAstWalker):
     def parse_file(self, content: bytes):
         return self.parser.parse(content)
 
+    def _normalize_module_path(self, raw_path: str) -> str:
+        clean = raw_path.replace("\\", "/").strip("./")
+        for ext in [".js", ".jsx", ".ts", ".mjs"]:
+            if clean.endswith(ext):
+                clean = clean[:-len(ext)]
+        parts = [p for p in clean.split("/") if p and p != ".."]
+        return ".".join(parts)
+
     def extract_imports(self, root_node) -> List[Dict[str, Any]]:
-        """
-        Extracts both ES6 imports and CommonJS require() calls via AST traversal.
-        - import x from './module'
-        - const x = require('./module')
-        """
         imports = []
 
         def traverse(node):
-            # Check ES6 import statement: import ... from './module'
             if node.type == "import_statement":
                 for child in node.children:
                     if child.type == "string":
-                        raw_text = child.text.decode("utf-8").strip("'\"")
+                        raw_text = child.text.decode("utf-8").strip("'" + '"')
                         imports.append({
-                            "module": raw_text,
+                            "module": self._normalize_module_path(raw_text),
                             "line": child.start_point[0] + 1
                         })
 
-            # Check CommonJS require: require('./module')
             elif node.type == "call_expression":
                 fn_node = node.child_by_field_name("function")
                 args_node = node.child_by_field_name("arguments")
                 if fn_node and fn_node.text.decode("utf-8") == "require" and args_node:
                     for arg in args_node.children:
                         if arg.type == "string":
-                            raw_text = arg.text.decode("utf-8").strip("'\"")
+                            raw_text = arg.text.decode("utf-8").strip("'" + '"')
                             imports.append({
-                                "module": raw_text,
+                                "module": self._normalize_module_path(raw_text),
                                 "line": arg.start_point[0] + 1
                             })
 
@@ -53,7 +54,6 @@ class JavaScriptAstWalker(BaseAstWalker):
         return imports
 
     def extract_calls(self, root_node) -> List[Dict[str, Any]]:
-        """Extracts function and method call names via AST traversal."""
         calls = []
 
         def traverse(node):

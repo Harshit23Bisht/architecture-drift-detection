@@ -1,0 +1,13 @@
+version: "1.0"
+layers:
+  - name: Controller
+    patterns:
+      - "*userController*"
+  - name: Repository
+    patterns:
+      - "*userRepository*"
+
+forbidden_dependencies:
+  - source: Controller
+    target: Repository
+    reason: "Controllers must not access the repository layer directly."

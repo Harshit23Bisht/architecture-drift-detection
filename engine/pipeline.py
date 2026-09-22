@@ -4,23 +4,33 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from rules.schema import load_config, ArchitectureConfig
-from parser.ast_walker import PythonAstWalker
+from parser.factory import ParserFactory
 from parser.resolver import DependencyResolver
 from engine.graph_builder import GraphBuilder
 from engine.rule_engine import RuleEngine
-from engine.scorer import SeverityScorer
 from engine.llm_explainer import LLMExplainer
+
+# Support Chunk 6 ML scorer with fallback to heuristic scorer
+try:
+    from engine.learned_scorer import LearnedSeverityScorer
+    _ml_scorer = LearnedSeverityScorer()
+except Exception:
+    _ml_scorer = None
+
+try:
+    from engine.scorer import SeverityScorer
+except Exception:
+    SeverityScorer = None
 
 logger = logging.getLogger("ArchitecturePipeline")
 
 class ArchitecturePipeline:
     def __init__(self, explainer: Optional[LLMExplainer] = None):
-        self.walker = PythonAstWalker()
         self.explainer = explainer or LLMExplainer()
 
     def analyze(self, repo_path: str, rules_path: str, extra_ignore_dirs: Optional[List[str]] = None) -> Dict[str, Any]:
         """
-        Executes the full 13-step architecture drift detection pipeline.
+        Executes the full architecture drift detection pipeline across polyglot files.
         """
         repo_dir = Path(repo_path).resolve()
         rules_file = Path(rules_path).resolve()
@@ -59,48 +69,50 @@ class ArchitecturePipeline:
                 "links": []
             }
 
-        # Step 3: Discover relevant source files (filtering out venv, git, caches, and configured ignore dirs)
+        # Step 3: Discover relevant source files (.py, .js, .jsx, .ts, .mjs)
         ignore_dirs = {".git", "venv", ".venv", "__pycache__", ".pytest_cache", "node_modules", "build", "dist"}
         if config.ignore_dirs:
             ignore_dirs.update(config.ignore_dirs)
         if extra_ignore_dirs:
             ignore_dirs.update(extra_ignore_dirs)
 
-        python_files = []
+        supported_extensions = {".py", ".js", ".jsx", ".ts", ".mjs"}
+        source_files = []
         for root, dirs, files in os.walk(repo_dir):
             dirs[:] = [d for d in dirs if d not in ignore_dirs]
             for file in files:
-                if file.endswith(".py"):
-                    python_files.append(Path(root) / file)
+                if Path(file).suffix.lower() in supported_extensions:
+                    source_files.append(Path(root) / file)
 
-        # Base package inference: use relative paths from repo_dir to align with import statements
+        # Base package inference
         resolver = DependencyResolver(base_package=None)
         known_modules = set()
         file_module_map = {}
 
-        for py_file in python_files:
-            mod_name = resolver.resolve_module_name(str(py_file), str(repo_dir))
+        for src_file in source_files:
+            mod_name = resolver.resolve_module_name(str(src_file), str(repo_dir))
             known_modules.add(mod_name)
-            file_module_map[str(py_file)] = mod_name
+            file_module_map[str(src_file)] = mod_name
 
-
-        # Step 4 & 5: Parse source files and extract AST elements
+        # Step 4 & 5: Parse source files using ParserFactory and extract AST elements
         parsed_files = []
         file_definitions = {}
         edge_metadata = {}
 
-        for py_file in python_files:
-            rel_file_path = str(py_file.relative_to(repo_dir))
-            source_module = file_module_map[str(py_file)]
+        for src_file in source_files:
+            rel_file_path = str(src_file.relative_to(repo_dir))
+            source_module = file_module_map[str(src_file)]
 
             try:
-                with open(py_file, "rb") as f:
+                walker = ParserFactory.get_walker(src_file)
+                with open(src_file, "rb") as f:
                     content = f.read()
 
-                tree = self.walker.parse_file(content)
-                imports = self.walker.extract_imports(tree.root_node)
-                calls = self.walker.extract_calls(tree.root_node)
-                defs = self.walker.extract_definitions(tree.root_node)
+                tree = walker.parse_file(content)
+                root_node = getattr(tree, "root_node", tree)
+                imports = walker.extract_imports(root_node)
+                calls = walker.extract_calls(root_node)
+                defs = walker.extract_definitions(root_node) if hasattr(walker, "extract_definitions") else []
 
                 file_definitions[rel_file_path] = defs
                 parsed_files.append(rel_file_path)
@@ -112,24 +124,31 @@ class ArchitecturePipeline:
                 logger.warning(f"Failed to parse source file '{rel_file_path}': {e}")
 
         detailed_edges = resolver.get_detailed_edges()
-        
+
         # Populate metadata for edge location lookup
         for e in detailed_edges:
             edge_metadata[(e["source"], e["target"])] = {"line": e.get("line"), "is_internal": e.get("is_internal")}
 
-        # Step 7: Construct dependency graph (using internal edges primarily for rule checking)
+        # Step 7: Construct dependency graph
         graph = GraphBuilder.build_from_edges(detailed_edges)
 
         # Step 8 & 9: Apply rules and detect violations
         rule_engine = RuleEngine(configured_layers=config.layers)
         raw_violations = rule_engine.detect_violations(graph, edge_metadata=edge_metadata)
 
-        # Step 10 & 11: Calculate severity scoring and generate LLM/fallback explanations
+        # Step 10 & 11: Calculate severity scoring (Chunk 6 ML scorer with fallback)
         processed_violations = []
         violating_edges = set()
 
         for v in raw_violations:
-            scored = SeverityScorer.score_violation(dict(v))
+            v_dict = dict(v)
+            if _ml_scorer:
+                scored = _ml_scorer.score_violation(v_dict, graph)
+            elif SeverityScorer:
+                scored = SeverityScorer.score_violation(v_dict)
+            else:
+                scored = v_dict
+
             explained = self.explainer.explain_violation(scored)
             processed_violations.append(explained)
 
@@ -139,7 +158,7 @@ class ArchitecturePipeline:
                 for i in range(len(edge_or_cycle) - 1):
                     violating_edges.add((edge_or_cycle[i], edge_or_cycle[i+1]))
 
-        # Calculate health score
+        # Calculate health score: max(0, 100 - sum(impact))
         base_health = 100
         total_impact = sum(v.get("impact_score", 0) for v in processed_violations)
         final_health = max(0, base_health - total_impact)
@@ -147,9 +166,7 @@ class ArchitecturePipeline:
 
         # Construct visual nodes and links for frontend UI
         nodes = []
-        layer_map = {}
-        for idx, layer in enumerate(config.layers):
-            layer_map[layer.name] = idx + 1
+        layer_map = {layer.name: idx + 1 for idx, layer in enumerate(config.layers)}
 
         for node_id in graph.nodes():
             layer_name = rule_engine._get_layer_for_module(node_id) or "Unmapped"
