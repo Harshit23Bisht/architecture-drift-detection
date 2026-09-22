@@ -26,6 +26,19 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Architecture Drift Scanner
+      - name: Run Architecture Drift Scanner (Project Scan)
         run: |
-          python -m engine.cli scan --repo . --rules sample_repo/architecture_rules.yaml --fail-on HIGH
+          python -m engine.cli scan --repo . --rules architecture_rules.yaml --fail-on HIGH
+
+      - name: Verify Architecture Gate Regression Test (sample_repo)
+        run: |
+          if python -m engine.cli scan --repo sample_repo --rules sample_repo/architecture_rules.yaml --fail-on HIGH; then
+            echo "Expected architecture scanner to fail on sample_repo, but it passed!"
+            exit 1
+          else
+            echo "Architecture scanner correctly caught intentional violation in sample_repo (exit code 1)."
+          fi
+
+      - name: Run Test Suite
+        run: |
+          pytest -v

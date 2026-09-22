@@ -1,0 +1,26 @@
+layers:
+  - name: engine
+    allowed_calls:
+      - parser
+      - rules
+      - engine
+    forbidden_calls: []
+  - name: parser
+    allowed_calls:
+      - parser
+    forbidden_calls:
+      - engine
+      - rules
+  - name: rules
+    allowed_calls:
+      - rules
+    forbidden_calls:
+      - engine
+      - parser
+
+ci:
+  fail_on: HIGH
+
+ignore_dirs:
+  - sample_repo
+  - sample_repo_valid

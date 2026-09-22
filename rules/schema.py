@@ -28,6 +28,7 @@ class CIConfig(BaseModel):
 class ArchitectureConfig(BaseModel):
     layers: List[LayerRule]
     ci: Optional[CIConfig] = Field(default_factory=CIConfig)
+    ignore_dirs: Optional[List[str]] = Field(default_factory=list)
     
     @field_validator('layers')
     def check_layer_references(cls, layers):

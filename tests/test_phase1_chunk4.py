@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from main import app
-from engine.cli import evaluate_threshold, detect_git_changed_files
+from engine.cli import evaluate_threshold, detect_git_changed_files, run_scan
 from engine.storage import HealthHistoryStorage
 from engine.pipeline import ArchitecturePipeline
 from rules.schema import CIConfig, ArchitectureConfig, LayerRule
@@ -142,3 +142,85 @@ def test_ci_offline_mode_resiliency(base_dir):
     finally:
         if old_key:
             os.environ["ANTHROPIC_API_KEY"] = old_key
+
+# --- 7. CI SCAN GATE & INTEGRATION TESTS ---
+
+def test_ci_normal_project_scan_passes(base_dir):
+    """Verifies that normal scan of the actual project repository passes with exit code 0."""
+    from types import SimpleNamespace
+    args = SimpleNamespace(
+        repo=str(base_dir),
+        rules=str(base_dir / "architecture_rules.yaml"),
+        fail_on="HIGH",
+        save_history=False,
+        ignore=None
+    )
+
+    exit_code = run_scan(args)
+    assert exit_code == 0
+
+def test_ci_intentional_sample_repo_violation_fails(base_dir):
+    """Verifies that scanning sample_repo intentionally exits with code 1 due to HIGH violation."""
+    from types import SimpleNamespace
+    args = SimpleNamespace(
+        repo=str(base_dir / "sample_repo"),
+        rules=str(base_dir / "sample_repo" / "architecture_rules.yaml"),
+        fail_on="HIGH",
+        save_history=False,
+        ignore=None
+    )
+
+    exit_code = run_scan(args)
+    assert exit_code == 1
+
+def test_ci_real_project_high_violation_fails(tmp_path):
+    """Verifies that a real HIGH violation in a project fails the scanner with exit code 1."""
+    repo = tmp_path / "violating_project"
+    parser_dir = repo / "parser"
+    parser_dir.mkdir(parents=True)
+    (parser_dir / "__init__.py").write_text("")
+    (parser_dir / "walker.py").write_text("import engine.pipeline\n")
+
+    engine_dir = repo / "engine"
+    engine_dir.mkdir(parents=True)
+    (engine_dir / "__init__.py").write_text("")
+    (engine_dir / "pipeline.py").write_text("class Pipeline: pass\n")
+
+    rules_file = repo / "architecture_rules.yaml"
+    rules_file.write_text("""
+layers:
+  - name: engine
+    allowed_calls: [parser, engine]
+  - name: parser
+    allowed_calls: [parser]
+    forbidden_calls: [engine]
+ci:
+  fail_on: HIGH
+""")
+
+    from types import SimpleNamespace
+    args = SimpleNamespace(
+        repo=str(repo),
+        rules=str(rules_file),
+        fail_on="HIGH",
+        save_history=False,
+        ignore=None
+    )
+
+    exit_code = run_scan(args)
+    assert exit_code == 1
+
+def test_ci_health_persistence_during_scan(base_dir, tmp_path):
+    """Verifies that health score persistence continues working properly during scans."""
+    db_file = tmp_path / "ci_history.db"
+    storage = HealthHistoryStorage(db_path=str(db_file))
+
+    pipeline = ArchitecturePipeline()
+    result = pipeline.analyze(str(base_dir), str(base_dir / "architecture_rules.yaml"))
+    run_id = storage.save_run(result, repo_name="project_root")
+
+    assert run_id > 0
+    history = storage.get_history(repo_name="project_root")
+    assert len(history) == 1
+    assert history[0]["health_score"] == 100
+    assert history[0]["total_violations"] == 0

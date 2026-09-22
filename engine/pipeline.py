@@ -18,7 +18,7 @@ class ArchitecturePipeline:
         self.walker = PythonAstWalker()
         self.explainer = explainer or LLMExplainer()
 
-    def analyze(self, repo_path: str, rules_path: str) -> Dict[str, Any]:
+    def analyze(self, repo_path: str, rules_path: str, extra_ignore_dirs: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Executes the full 13-step architecture drift detection pipeline.
         """
@@ -59,8 +59,13 @@ class ArchitecturePipeline:
                 "links": []
             }
 
-        # Step 3: Discover relevant source files (filtering out venv, git, caches)
+        # Step 3: Discover relevant source files (filtering out venv, git, caches, and configured ignore dirs)
         ignore_dirs = {".git", "venv", ".venv", "__pycache__", ".pytest_cache", "node_modules", "build", "dist"}
+        if config.ignore_dirs:
+            ignore_dirs.update(config.ignore_dirs)
+        if extra_ignore_dirs:
+            ignore_dirs.update(extra_ignore_dirs)
+
         python_files = []
         for root, dirs, files in os.walk(repo_dir):
             dirs[:] = [d for d in dirs if d not in ignore_dirs]

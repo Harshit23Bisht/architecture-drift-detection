@@ -82,7 +82,7 @@ def run_scan(args) -> int:
     print("\nRunning full architecture dependency analysis...")
 
     pipeline = ArchitecturePipeline()
-    result = pipeline.analyze(str(repo_path), str(rules_path))
+    result = pipeline.analyze(str(repo_path), str(rules_path), extra_ignore_dirs=getattr(args, "ignore", None))
 
     if result.get("error"):
         print(f"\n[ERROR] Analysis failed: {result['error']}")
@@ -148,7 +148,7 @@ def install_hook(args) -> int:
     hook_script = f"""#!/bin/sh
 # Architecture Drift Detection Git {hook_type} hook
 echo "Running Architecture Drift Detection check..."
-"{python_executable}" -m engine.cli scan --repo . --rules sample_repo/architecture_rules.yaml --fail-on {args.fail_on}
+"{python_executable}" -m engine.cli scan --repo . --rules architecture_rules.yaml --fail-on {args.fail_on}
 RESULT=$?
 if [ $RESULT -ne 0 ]; then
     echo "Architecture check failed! Commit/push aborted."
@@ -180,8 +180,9 @@ def main():
     # Command: scan
     scan_parser = subparsers.add_parser("scan", help="Run architecture scan on repository")
     scan_parser.add_argument("--repo", default=".", help="Target repository directory (default: .)")
-    scan_parser.add_argument("--rules", default="sample_repo/architecture_rules.yaml", help="Path to rules YAML file")
+    scan_parser.add_argument("--rules", default="architecture_rules.yaml", help="Path to rules YAML file (default: architecture_rules.yaml)")
     scan_parser.add_argument("--fail-on", choices=["HIGH", "MEDIUM", "LOW", "high", "medium", "low"], default=None, help="Severity threshold to fail scan")
+    scan_parser.add_argument("--ignore", nargs="*", default=None, help="Additional directory names to ignore during scan")
     scan_parser.add_argument("--no-history", dest="save_history", action="store_false", help="Disable recording to SQLite health history")
     scan_parser.set_defaults(save_history=True)
 
@@ -200,8 +201,9 @@ def main():
     else:
         # Default behavior: run scan on current directory
         args.repo = "."
-        args.rules = "sample_repo/architecture_rules.yaml"
+        args.rules = "architecture_rules.yaml" if Path("architecture_rules.yaml").exists() else "sample_repo/architecture_rules.yaml"
         args.fail_on = None
+        args.ignore = None
         args.save_history = True
         sys.exit(run_scan(args))
 
