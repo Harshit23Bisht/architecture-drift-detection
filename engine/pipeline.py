@@ -10,6 +10,7 @@ from engine.graph_builder import GraphBuilder
 from engine.rule_engine import RuleEngine
 from engine.llm_explainer import LLMExplainer
 
+# Support Chunk 6 ML scorer with fallback to heuristic scorer
 try:
     from engine.learned_scorer import LearnedSeverityScorer
     _ml_scorer = LearnedSeverityScorer()
@@ -158,7 +159,6 @@ class ArchitecturePipeline:
         for v in raw_violations:
             violation_dict = dict(v)
 
-            # Prioritize ML Scorer if enabled, then Heuristic Scorer, then default
             if use_ml_scoring and self.learned_scorer and hasattr(self.learned_scorer, "score_violation"):
                 scored = self.learned_scorer.score_violation(violation_dict, graph)
             elif SeverityScorer:
@@ -166,7 +166,6 @@ class ArchitecturePipeline:
             else:
                 scored = self._default_heuristic_score(violation_dict)
 
-            # Ensure forbidden calls are marked high
             rule_text = str(scored.get("rule_broken", "")).lower()
             if "forbidden" in rule_text or "not allowed" in rule_text:
                 scored["severity"] = "high"
