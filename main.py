@@ -52,8 +52,8 @@ class ViolationSchema(BaseModel):
     violation_type: str
     severity: Optional[str] = None
     impact_score: Optional[int] = None
-    confidence: Optional[str] = None       # Chunk 6
-    scoring_mode: Optional[str] = None     # Chunk 6
+    confidence: Optional[str] = None
+    scoring_mode: Optional[str] = None
     ai_explanation: Optional[str] = None
     ai_fix: Optional[str] = None
 
@@ -109,13 +109,19 @@ def apply_chunk6_ml_scoring(result: Dict[str, Any]) -> Dict[str, Any]:
     total_impact = 0
 
     for v in violations:
-        # Construct feature context for model
+        v_type = str(v.get("violation_type", "")).lower()
+        rule_broken = str(v.get("rule_broken", "")).lower()
+        is_circular = "circular" in v_type or "cycle" in v_type
+        is_layer = "layer" in v_type or "forbidden" in v_type or "forbidden" in rule_broken
+
+        cycle = v.get("edge_or_cycle", [])
         feature_context = {
-            "type": v.get("violation_type", ""),
-            "cycle_length": len(v.get("edge_or_cycle", [])) if "CIRCULAR" in v.get("violation_type", "") else 0,
-            "layers_skipped": 2 if "LAYER" in v.get("violation_type", "") else 0,
-            "fan_out": 2
+            "type": "circular_dependency" if is_circular else ("layer_violation" if is_layer else v_type),
+            "cycle_length": len(set(cycle)) if is_circular else 0,
+            "layers_skipped": 2 if is_layer else 0,
+            "fan_out": 3 if is_layer else 2
         }
+
         ml_prediction = learned_scorer.predict_severity(feature_context)
 
         v["severity"] = ml_prediction["predicted_severity"]
@@ -124,7 +130,6 @@ def apply_chunk6_ml_scoring(result: Dict[str, Any]) -> Dict[str, Any]:
         v["scoring_mode"] = ml_prediction["scoring_mode"]
         total_impact += ml_prediction["impact_deduction"]
 
-    # Recalculate Architecture Health Score: max(0, 100 - sum(impact))
     new_health = max(0, 100 - total_impact)
     result["health_score"] = new_health
     result["status"] = "Healthy" if new_health >= 80 else ("Warning" if new_health >= 50 else "Critical")
@@ -164,7 +169,6 @@ def analyze(req: Optional[AnalysisRequest] = None):
                 detail=result["error"]
             )
 
-        # Apply Chunk 6 ML Model
         if use_ml:
             result = apply_chunk6_ml_scoring(result)
 
