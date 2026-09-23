@@ -4,31 +4,23 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from rules.schema import load_config, ArchitectureConfig
-from parser.factory import ParserFactory
+from parser.ast_walker import PythonAstWalker
 from parser.resolver import DependencyResolver
 from engine.graph_builder import GraphBuilder
 from engine.rule_engine import RuleEngine
 from engine.scorer import SeverityScorer
-from engine.learned_scorer import LearnedSeverityScorer
 from engine.llm_explainer import LLMExplainer
 
 logger = logging.getLogger("ArchitecturePipeline")
 
 class ArchitecturePipeline:
     def __init__(self, explainer: Optional[LLMExplainer] = None):
+        self.walker = PythonAstWalker()
         self.explainer = explainer or LLMExplainer()
-        self.learned_scorer = LearnedSeverityScorer()
 
-    def analyze(
-        self,
-        repo_path: str,
-        rules_path: str,
-        extra_ignore_dirs: Optional[List[str]] = None,
-        use_ml_scoring: bool = True
-    ) -> Dict[str, Any]:
+    def analyze(self, repo_path: str, rules_path: str, extra_ignore_dirs: Optional[List[str]] = None) -> Dict[str, Any]:
         """
-        Executes the full architecture drift detection pipeline with polyglot AST parsing
-        (Chunk 5) and learned severity scoring (Chunk 6).
+        Executes the full 13-step architecture drift detection pipeline.
         """
         repo_dir = Path(repo_path).resolve()
         rules_file = Path(rules_path).resolve()
@@ -67,51 +59,48 @@ class ArchitecturePipeline:
                 "links": []
             }
 
-        # Step 3: Discover relevant source files (Python & JavaScript/TypeScript)
+        # Step 3: Discover relevant source files (filtering out venv, git, caches, and configured ignore dirs)
         ignore_dirs = {".git", "venv", ".venv", "__pycache__", ".pytest_cache", "node_modules", "build", "dist"}
         if config.ignore_dirs:
             ignore_dirs.update(config.ignore_dirs)
         if extra_ignore_dirs:
             ignore_dirs.update(extra_ignore_dirs)
 
-        supported_extensions = {".py", ".js", ".jsx", ".mjs", ".ts"}
-        source_files = []
+        python_files = []
         for root, dirs, files in os.walk(repo_dir):
             dirs[:] = [d for d in dirs if d not in ignore_dirs]
             for file in files:
-                file_path = Path(root) / file
-                if file_path.suffix.lower() in supported_extensions:
-                    source_files.append(file_path)
+                if file.endswith(".py"):
+                    python_files.append(Path(root) / file)
 
-        # Base package inference
+        # Base package inference: use relative paths from repo_dir to align with import statements
         resolver = DependencyResolver(base_package=None)
         known_modules = set()
         file_module_map = {}
 
-        for src_file in source_files:
-            mod_name = resolver.resolve_module_name(str(src_file), str(repo_dir))
+        for py_file in python_files:
+            mod_name = resolver.resolve_module_name(str(py_file), str(repo_dir))
             known_modules.add(mod_name)
-            file_module_map[str(src_file)] = mod_name
+            file_module_map[str(py_file)] = mod_name
 
-        # Step 4 & 5: Parse source files using ParserFactory (Chunk 5: Adapter Pattern)
+
+        # Step 4 & 5: Parse source files and extract AST elements
         parsed_files = []
         file_definitions = {}
         edge_metadata = {}
 
-        for src_file in source_files:
-            rel_file_path = str(src_file.relative_to(repo_dir))
-            source_module = file_module_map[str(src_file)]
+        for py_file in python_files:
+            rel_file_path = str(py_file.relative_to(repo_dir))
+            source_module = file_module_map[str(py_file)]
 
             try:
-                with open(src_file, "rb") as f:
+                with open(py_file, "rb") as f:
                     content = f.read()
 
-                # Dynamic walker selection based on file extension
-                walker = ParserFactory.get_walker(src_file)
-                tree = walker.parse_file(content)
-                imports = walker.extract_imports(tree.root_node)
-                calls = walker.extract_calls(tree.root_node)
-                defs = getattr(walker, "extract_definitions", lambda node: [])(tree.root_node)
+                tree = self.walker.parse_file(content)
+                imports = self.walker.extract_imports(tree.root_node)
+                calls = self.walker.extract_calls(tree.root_node)
+                defs = self.walker.extract_definitions(tree.root_node)
 
                 file_definitions[rel_file_path] = defs
                 parsed_files.append(rel_file_path)
@@ -128,36 +117,19 @@ class ArchitecturePipeline:
         for e in detailed_edges:
             edge_metadata[(e["source"], e["target"])] = {"line": e.get("line"), "is_internal": e.get("is_internal")}
 
-        # Step 7: Construct dependency graph
+        # Step 7: Construct dependency graph (using internal edges primarily for rule checking)
         graph = GraphBuilder.build_from_edges(detailed_edges)
 
         # Step 8 & 9: Apply rules and detect violations
         rule_engine = RuleEngine(configured_layers=config.layers)
         raw_violations = rule_engine.detect_violations(graph, edge_metadata=edge_metadata)
 
-        # Step 10 & 11: Severity Scoring (Chunk 6: Learned Scorer vs Heuristics) & LLM Explanations
+        # Step 10 & 11: Calculate severity scoring and generate LLM/fallback explanations
         processed_violations = []
         violating_edges = set()
 
         for v in raw_violations:
-            violation_dict = dict(v)
-
-            if use_ml_scoring:
-                feature_ctx = {
-                    "type": violation_dict.get("violation_type", ""),
-                    "cycle_length": len(violation_dict.get("edge_or_cycle", [])) if "CIRCULAR" in violation_dict.get("violation_type", "") else 0,
-                    "layers_skipped": 2 if "LAYER" in violation_dict.get("violation_type", "") else 0,
-                    "fan_out": graph.out_degree(violation_dict.get("source", "")) if graph.has_node(violation_dict.get("source", "")) else 1
-                }
-                ml_pred = self.learned_scorer.predict_severity(feature_ctx)
-                violation_dict["severity"] = ml_pred["predicted_severity"]
-                violation_dict["impact_score"] = ml_pred["impact_deduction"]
-                violation_dict["confidence"] = f"{ml_pred['confidence'] * 100:.1f}%"
-                violation_dict["scoring_mode"] = ml_pred["scoring_mode"]
-                scored = violation_dict
-            else:
-                scored = SeverityScorer.score_violation(violation_dict)
-
+            scored = SeverityScorer.score_violation(dict(v))
             explained = self.explainer.explain_violation(scored)
             processed_violations.append(explained)
 
@@ -167,7 +139,7 @@ class ArchitecturePipeline:
                 for i in range(len(edge_or_cycle) - 1):
                     violating_edges.add((edge_or_cycle[i], edge_or_cycle[i+1]))
 
-        # Calculate health score: max(0, 100 - sum(impact_score))
+        # Calculate health score
         base_health = 100
         total_impact = sum(v.get("impact_score", 0) for v in processed_violations)
         final_health = max(0, base_health - total_impact)

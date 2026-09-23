@@ -1,18 +1,17 @@
 import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from engine.pipeline import ArchitecturePipeline
 from engine.llm_explainer import LLMExplainer
 from engine.storage import HealthHistoryStorage
-from engine.learned_scorer import LearnedSeverityScorer
 
 app = FastAPI(
     title="Architecture Drift API",
-    description="Backend API for architecture drift detection, polyglot parsing, and ML severity scoring."
+    description="Backend API for architecture drift detection and code parsing pipeline."
 )
 
 # Enable CORS for local frontend dashboard development
@@ -27,7 +26,6 @@ app.add_middleware(
 explainer = LLMExplainer()
 pipeline = ArchitecturePipeline(explainer=explainer)
 storage = HealthHistoryStorage()
-learned_scorer = LearnedSeverityScorer()
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REPO = os.path.join(BASE_DIR, "sample_repo")
@@ -38,7 +36,6 @@ DEFAULT_RULES = os.path.join(DEFAULT_REPO, "architecture_rules.yaml")
 class AnalysisRequest(BaseModel):
     repo_path: Optional[str] = Field(default=None, description="Absolute or relative path to target repository")
     rules_path: Optional[str] = Field(default=None, description="Absolute or relative path to architecture YAML rules file")
-    use_ml_scoring: bool = Field(default=True, description="Enable Chunk 6 ML-learned severity scoring")
 
 class ViolationSchema(BaseModel):
     violation_id: Optional[str] = None
@@ -52,8 +49,6 @@ class ViolationSchema(BaseModel):
     violation_type: str
     severity: Optional[str] = None
     impact_score: Optional[int] = None
-    confidence: Optional[str] = None       # Chunk 6
-    scoring_mode: Optional[str] = None     # Chunk 6
     ai_explanation: Optional[str] = None
     ai_fix: Optional[str] = None
 
@@ -101,49 +96,20 @@ class HealthHistoryItem(BaseModel):
     parsed_file_count: int
     total_dependencies: int
 
-# --- HELPER: APPLY ML SCORING (CHUNK 6) ---
-
-def apply_chunk6_ml_scoring(result: Dict[str, Any]) -> Dict[str, Any]:
-    """Overrides static heuristic severity with LearnedSeverityScorer predictions."""
-    violations = result.get("violations", [])
-    total_impact = 0
-
-    for v in violations:
-        # Construct feature context for model
-        feature_context = {
-            "type": v.get("violation_type", ""),
-            "cycle_length": len(v.get("edge_or_cycle", [])) if "CIRCULAR" in v.get("violation_type", "") else 0,
-            "layers_skipped": 2 if "LAYER" in v.get("violation_type", "") else 0,
-            "fan_out": 2
-        }
-        ml_prediction = learned_scorer.predict_severity(feature_context)
-
-        v["severity"] = ml_prediction["predicted_severity"]
-        v["impact_score"] = ml_prediction["impact_deduction"]
-        v["confidence"] = f"{ml_prediction['confidence'] * 100:.1f}%"
-        v["scoring_mode"] = ml_prediction["scoring_mode"]
-        total_impact += ml_prediction["impact_deduction"]
-
-    # Recalculate Architecture Health Score: max(0, 100 - sum(impact))
-    new_health = max(0, 100 - total_impact)
-    result["health_score"] = new_health
-    result["status"] = "Healthy" if new_health >= 80 else ("Warning" if new_health >= 50 else "Critical")
-    if "summary" in result and result["summary"]:
-        result["summary"]["health_score"] = new_health
-
-    return result
-
 # --- ENDPOINTS ---
 
 @app.post("/analyze", response_model=AnalysisResponse)
 def analyze(req: Optional[AnalysisRequest] = None):
+    """
+    Executes end-to-end architecture analysis on the specified target repository and records history.
+    """
     repo = (req.repo_path if req and req.repo_path else DEFAULT_REPO)
     rules = (req.rules_path if req and req.rules_path else DEFAULT_RULES)
-    use_ml = req.use_ml_scoring if req else True
 
     repo_dir = Path(repo).resolve()
     rules_file = Path(rules).resolve()
 
+    # Input validation
     if not repo_dir.exists() or not repo_dir.is_dir():
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -163,11 +129,8 @@ def analyze(req: Optional[AnalysisRequest] = None):
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=result["error"]
             )
-
-        # Apply Chunk 6 ML Model
-        if use_ml:
-            result = apply_chunk6_ml_scoring(result)
-
+        
+        # Save run to SQLite persistence storage automatically
         try:
             storage.save_run(result)
         except Exception:
@@ -184,29 +147,30 @@ def analyze(req: Optional[AnalysisRequest] = None):
 
 @app.get("/health-history", response_model=List[HealthHistoryItem])
 def get_health_history(limit: int = 50):
+    """Returns historical architecture health scores across all repositories."""
     return storage.get_history(limit=limit)
 
 @app.get("/health-history/{repo_name}", response_model=List[HealthHistoryItem])
 def get_health_history_for_repo(repo_name: str, limit: int = 50):
+    """Returns historical architecture health scores for a specific repository."""
     return storage.get_history(repo_name=repo_name, limit=limit)
 
 @app.get("/graph")
 def get_graph():
+    """Returns the graph topology for visualization from active pipeline execution."""
     result = pipeline.analyze(DEFAULT_REPO, DEFAULT_RULES)
     return {"nodes": result.get("nodes", []), "links": result.get("links", [])}
 
 @app.get("/violations")
-def get_violations(use_ml: bool = True):
+def get_violations():
+    """Returns architecture violations from active pipeline execution."""
     result = pipeline.analyze(DEFAULT_REPO, DEFAULT_RULES)
-    if use_ml:
-        result = apply_chunk6_ml_scoring(result)
     return result.get("violations", [])
 
 @app.get("/health-score")
-def get_health_score(use_ml: bool = True):
+def get_health_score():
+    """Calculates overall health score from active pipeline execution."""
     result = pipeline.analyze(DEFAULT_REPO, DEFAULT_RULES)
-    if use_ml:
-        result = apply_chunk6_ml_scoring(result)
     return {
         "health_score": result.get("health_score", 100),
         "status": result.get("status", "Healthy")
