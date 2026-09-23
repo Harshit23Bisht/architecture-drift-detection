@@ -8,16 +8,26 @@ from parser.factory import ParserFactory
 from parser.resolver import DependencyResolver
 from engine.graph_builder import GraphBuilder
 from engine.rule_engine import RuleEngine
-from engine.scorer import SeverityScorer
-from engine.learned_scorer import LearnedSeverityScorer
 from engine.llm_explainer import LLMExplainer
+
+# Support Chunk 6 ML scorer with fallback to heuristic scorer
+try:
+    from engine.learned_scorer import LearnedSeverityScorer
+    _ml_scorer = LearnedSeverityScorer()
+except Exception:
+    _ml_scorer = None
+
+try:
+    from engine.scorer import SeverityScorer
+except Exception:
+    SeverityScorer = None
 
 logger = logging.getLogger("ArchitecturePipeline")
 
 class ArchitecturePipeline:
     def __init__(self, explainer: Optional[LLMExplainer] = None):
         self.explainer = explainer or LLMExplainer()
-        self.learned_scorer = LearnedSeverityScorer()
+        self.learned_scorer = _ml_scorer
 
     def analyze(
         self,
@@ -74,7 +84,7 @@ class ArchitecturePipeline:
         if extra_ignore_dirs:
             ignore_dirs.update(extra_ignore_dirs)
 
-        supported_extensions = {".py", ".js", ".jsx", ".mjs", ".ts"}
+        supported_extensions = {".py", ".js", ".jsx", ".ts", ".mjs"}
         source_files = []
         for root, dirs, files in os.walk(repo_dir):
             dirs[:] = [d for d in dirs if d not in ignore_dirs]
@@ -109,9 +119,11 @@ class ArchitecturePipeline:
                 # Dynamic walker selection based on file extension
                 walker = ParserFactory.get_walker(src_file)
                 tree = walker.parse_file(content)
-                imports = walker.extract_imports(tree.root_node)
-                calls = walker.extract_calls(tree.root_node)
-                defs = getattr(walker, "extract_definitions", lambda node: [])(tree.root_node)
+                root_node = getattr(tree, "root_node", tree)
+
+                imports = walker.extract_imports(root_node)
+                calls = walker.extract_calls(root_node)
+                defs = getattr(walker, "extract_definitions", lambda node: [])(root_node)
 
                 file_definitions[rel_file_path] = defs
                 parsed_files.append(rel_file_path)
@@ -123,7 +135,7 @@ class ArchitecturePipeline:
                 logger.warning(f"Failed to parse source file '{rel_file_path}': {e}")
 
         detailed_edges = resolver.get_detailed_edges()
-        
+
         # Populate metadata for edge location lookup
         for e in detailed_edges:
             edge_metadata[(e["source"], e["target"])] = {"line": e.get("line"), "is_internal": e.get("is_internal")}
@@ -142,21 +154,29 @@ class ArchitecturePipeline:
         for v in raw_violations:
             violation_dict = dict(v)
 
-            if use_ml_scoring:
-                feature_ctx = {
-                    "type": violation_dict.get("violation_type", ""),
-                    "cycle_length": len(violation_dict.get("edge_or_cycle", [])) if "CIRCULAR" in violation_dict.get("violation_type", "") else 0,
-                    "layers_skipped": 2 if "LAYER" in violation_dict.get("violation_type", "") else 0,
-                    "fan_out": graph.out_degree(violation_dict.get("source", "")) if graph.has_node(violation_dict.get("source", "")) else 1
-                }
-                ml_pred = self.learned_scorer.predict_severity(feature_ctx)
-                violation_dict["severity"] = ml_pred["predicted_severity"]
-                violation_dict["impact_score"] = ml_pred["impact_deduction"]
-                violation_dict["confidence"] = f"{ml_pred['confidence'] * 100:.1f}%"
-                violation_dict["scoring_mode"] = ml_pred["scoring_mode"]
-                scored = violation_dict
-            else:
+            if use_ml_scoring and self.learned_scorer:
+                # Adapts to either score_violation or predict_severity signature
+                if hasattr(self.learned_scorer, "score_violation"):
+                    scored = self.learned_scorer.score_violation(violation_dict, graph)
+                elif hasattr(self.learned_scorer, "predict_severity"):
+                    feature_ctx = {
+                        "type": violation_dict.get("violation_type", ""),
+                        "cycle_length": len(violation_dict.get("edge_or_cycle", [])) if "CIRCULAR" in violation_dict.get("violation_type", "").upper() else 0,
+                        "layers_skipped": 2 if "LAYER" in violation_dict.get("violation_type", "").upper() else 0,
+                        "fan_out": graph.out_degree(violation_dict.get("source", "")) if graph.has_node(violation_dict.get("source", "")) else 1
+                    }
+                    ml_pred = self.learned_scorer.predict_severity(feature_ctx)
+                    violation_dict["severity"] = ml_pred.get("predicted_severity", "medium").lower()
+                    violation_dict["impact_score"] = ml_pred.get("impact_deduction", 25)
+                    violation_dict["confidence"] = ml_pred.get("confidence", 0.8)
+                    violation_dict["scoring_mode"] = ml_pred.get("scoring_mode", "ml")
+                    scored = violation_dict
+                else:
+                    scored = violation_dict
+            elif SeverityScorer:
                 scored = SeverityScorer.score_violation(violation_dict)
+            else:
+                scored = violation_dict
 
             explained = self.explainer.explain_violation(scored)
             processed_violations.append(explained)
@@ -175,9 +195,7 @@ class ArchitecturePipeline:
 
         # Construct visual nodes and links for frontend UI
         nodes = []
-        layer_map = {}
-        for idx, layer in enumerate(config.layers):
-            layer_map[layer.name] = idx + 1
+        layer_map = {layer.name: idx + 1 for idx, layer in enumerate(config.layers)}
 
         for node_id in graph.nodes():
             layer_name = rule_engine._get_layer_for_module(node_id) or "Unmapped"
