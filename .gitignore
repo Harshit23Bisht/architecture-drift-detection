@@ -9,3 +9,5 @@ __pycache__/
 
 # Secrets and environment variables
 .env
+
+Add-Content -Path .gitignore -Value "`n*.db"
