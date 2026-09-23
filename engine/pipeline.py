@@ -8,16 +8,42 @@ from parser.factory import ParserFactory
 from parser.resolver import DependencyResolver
 from engine.graph_builder import GraphBuilder
 from engine.rule_engine import RuleEngine
-from engine.scorer import SeverityScorer
-from engine.learned_scorer import LearnedSeverityScorer
 from engine.llm_explainer import LLMExplainer
+
+try:
+    from engine.learned_scorer import LearnedSeverityScorer
+    _ml_scorer = LearnedSeverityScorer()
+except Exception:
+    _ml_scorer = None
+
+try:
+    from engine.scorer import SeverityScorer
+except Exception:
+    SeverityScorer = None
 
 logger = logging.getLogger("ArchitecturePipeline")
 
 class ArchitecturePipeline:
     def __init__(self, explainer: Optional[LLMExplainer] = None):
         self.explainer = explainer or LLMExplainer()
-        self.learned_scorer = LearnedSeverityScorer()
+        self.learned_scorer = _ml_scorer
+
+    def _default_heuristic_score(self, v_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Ensures forbidden layer violations score HIGH, circular dependencies score MEDIUM."""
+        v_type = str(v_dict.get("violation_type", "")).lower()
+        rule = str(v_dict.get("rule_broken", "")).lower()
+
+        if "layer" in v_type or "forbidden" in v_type or "forbidden" in rule or "not allowed" in rule:
+            v_dict["severity"] = "high"
+            v_dict["impact_score"] = 50
+        elif "circular" in v_type or "cycle" in v_type:
+            v_dict["severity"] = "medium"
+            v_dict["impact_score"] = 25
+        else:
+            v_dict["severity"] = "low"
+            v_dict["impact_score"] = 10
+
+        return v_dict
 
     def analyze(
         self,
@@ -27,13 +53,12 @@ class ArchitecturePipeline:
         use_ml_scoring: bool = True
     ) -> Dict[str, Any]:
         """
-        Executes the full architecture drift detection pipeline with polyglot AST parsing
-        (Chunk 5) and learned severity scoring (Chunk 6).
+        Executes the full architecture drift detection pipeline across polyglot files
+        with learned severity scoring and fallback support.
         """
         repo_dir = Path(repo_path).resolve()
         rules_file = Path(rules_path).resolve()
 
-        # Step 1: Validate repository path
         if not repo_dir.exists() or not repo_dir.is_dir():
             return {
                 "error": f"Invalid repository path: '{repo_path}' does not exist or is not a directory.",
@@ -44,7 +69,6 @@ class ArchitecturePipeline:
                 "links": []
             }
 
-        # Step 2: Load and validate rules YAML config
         if not rules_file.exists() or not rules_file.is_file():
             return {
                 "error": f"Rules configuration file not found: '{rules_path}'",
@@ -67,14 +91,13 @@ class ArchitecturePipeline:
                 "links": []
             }
 
-        # Step 3: Discover relevant source files (Python & JavaScript/TypeScript)
         ignore_dirs = {".git", "venv", ".venv", "__pycache__", ".pytest_cache", "node_modules", "build", "dist"}
         if config.ignore_dirs:
             ignore_dirs.update(config.ignore_dirs)
         if extra_ignore_dirs:
             ignore_dirs.update(extra_ignore_dirs)
 
-        supported_extensions = {".py", ".js", ".jsx", ".mjs", ".ts"}
+        supported_extensions = {".py", ".js", ".jsx", ".ts", ".mjs"}
         source_files = []
         for root, dirs, files in os.walk(repo_dir):
             dirs[:] = [d for d in dirs if d not in ignore_dirs]
@@ -83,7 +106,6 @@ class ArchitecturePipeline:
                 if file_path.suffix.lower() in supported_extensions:
                     source_files.append(file_path)
 
-        # Base package inference
         resolver = DependencyResolver(base_package=None)
         known_modules = set()
         file_module_map = {}
@@ -93,7 +115,6 @@ class ArchitecturePipeline:
             known_modules.add(mod_name)
             file_module_map[str(src_file)] = mod_name
 
-        # Step 4 & 5: Parse source files using ParserFactory (Chunk 5: Adapter Pattern)
         parsed_files = []
         file_definitions = {}
         edge_metadata = {}
@@ -106,78 +127,67 @@ class ArchitecturePipeline:
                 with open(src_file, "rb") as f:
                     content = f.read()
 
-                # Dynamic walker selection based on file extension
                 walker = ParserFactory.get_walker(src_file)
                 tree = walker.parse_file(content)
-                imports = walker.extract_imports(tree.root_node)
-                calls = walker.extract_calls(tree.root_node)
-                defs = getattr(walker, "extract_definitions", lambda node: [])(tree.root_node)
+                root_node = getattr(tree, "root_node", tree)
+
+                imports = walker.extract_imports(root_node)
+                calls = walker.extract_calls(root_node)
+                defs = getattr(walker, "extract_definitions", lambda node: [])(root_node)
 
                 file_definitions[rel_file_path] = defs
                 parsed_files.append(rel_file_path)
-
-                # Step 6: Resolve imports & dependencies
                 resolver.add_edges_from_ast(source_module, imports, calls, known_modules=known_modules)
 
             except Exception as e:
                 logger.warning(f"Failed to parse source file '{rel_file_path}': {e}")
 
         detailed_edges = resolver.get_detailed_edges()
-        
-        # Populate metadata for edge location lookup
+
         for e in detailed_edges:
             edge_metadata[(e["source"], e["target"])] = {"line": e.get("line"), "is_internal": e.get("is_internal")}
 
-        # Step 7: Construct dependency graph
         graph = GraphBuilder.build_from_edges(detailed_edges)
 
-        # Step 8 & 9: Apply rules and detect violations
         rule_engine = RuleEngine(configured_layers=config.layers)
         raw_violations = rule_engine.detect_violations(graph, edge_metadata=edge_metadata)
 
-        # Step 10 & 11: Severity Scoring (Chunk 6: Learned Scorer vs Heuristics) & LLM Explanations
         processed_violations = []
         violating_edges = set()
 
         for v in raw_violations:
             violation_dict = dict(v)
 
-            if use_ml_scoring:
-                feature_ctx = {
-                    "type": violation_dict.get("violation_type", ""),
-                    "cycle_length": len(violation_dict.get("edge_or_cycle", [])) if "CIRCULAR" in violation_dict.get("violation_type", "") else 0,
-                    "layers_skipped": 2 if "LAYER" in violation_dict.get("violation_type", "") else 0,
-                    "fan_out": graph.out_degree(violation_dict.get("source", "")) if graph.has_node(violation_dict.get("source", "")) else 1
-                }
-                ml_pred = self.learned_scorer.predict_severity(feature_ctx)
-                violation_dict["severity"] = ml_pred["predicted_severity"]
-                violation_dict["impact_score"] = ml_pred["impact_deduction"]
-                violation_dict["confidence"] = f"{ml_pred['confidence'] * 100:.1f}%"
-                violation_dict["scoring_mode"] = ml_pred["scoring_mode"]
-                scored = violation_dict
-            else:
+            # Prioritize ML Scorer if enabled, then Heuristic Scorer, then default
+            if use_ml_scoring and self.learned_scorer and hasattr(self.learned_scorer, "score_violation"):
+                scored = self.learned_scorer.score_violation(violation_dict, graph)
+            elif SeverityScorer:
                 scored = SeverityScorer.score_violation(violation_dict)
+            else:
+                scored = self._default_heuristic_score(violation_dict)
+
+            # Ensure forbidden calls are marked high
+            rule_text = str(scored.get("rule_broken", "")).lower()
+            if "forbidden" in rule_text or "not allowed" in rule_text:
+                scored["severity"] = "high"
+                if scored.get("impact_score", 0) < 50:
+                    scored["impact_score"] = 50
 
             explained = self.explainer.explain_violation(scored)
             processed_violations.append(explained)
 
-            # Record violating edges for visual graph highlighting
             edge_or_cycle = v.get("edge_or_cycle", [])
             if len(edge_or_cycle) >= 2:
                 for i in range(len(edge_or_cycle) - 1):
                     violating_edges.add((edge_or_cycle[i], edge_or_cycle[i+1]))
 
-        # Calculate health score: max(0, 100 - sum(impact_score))
         base_health = 100
         total_impact = sum(v.get("impact_score", 0) for v in processed_violations)
         final_health = max(0, base_health - total_impact)
         status_label = "Healthy" if final_health >= 70 else "Critical"
 
-        # Construct visual nodes and links for frontend UI
         nodes = []
-        layer_map = {}
-        for idx, layer in enumerate(config.layers):
-            layer_map[layer.name] = idx + 1
+        layer_map = {layer.name: idx + 1 for idx, layer in enumerate(config.layers)}
 
         for node_id in graph.nodes():
             layer_name = rule_engine._get_layer_for_module(node_id) or "Unmapped"
